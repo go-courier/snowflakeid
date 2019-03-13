@@ -79,50 +79,6 @@ func TestSnowflake_WithDifferentWorkerID(t *testing.T) {
 	suite.ExpectN(suite.N * n)
 }
 
-func TestSnowflake_DynamicChangeWorkerID(t *testing.T) {
-	g, err := NewSnowflake(1)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ts := uint64(0)
-	s := uint32(0)
-	changed := false
-	breakpoint := false
-
-	for i := 1; i <= 1000000; i++ {
-		flake, _ := g.next()
-		if ts == 0 || ts == flake.timestamp {
-			if !changed {
-				ts = flake.timestamp
-				err := g.SetWorkerID(2)
-				if err != nil {
-					t.Fatal(err)
-				}
-				changed = true
-			}
-			if flake.workerID != 1 {
-				t.Fatalf("worker id should not be changed in same timestamp loop")
-			}
-			if flake.sequence < s {
-				t.Fatalf("sequence should auto increase")
-			}
-		} else {
-			if !breakpoint {
-				if flake.workerID != 2 {
-					t.Fatalf("worker id should be changed, but got %d", flake.workerID)
-				}
-				if flake.sequence > s {
-					t.Fatalf("sequence %d should reset, last %d", flake.sequence, s)
-				}
-				breakpoint = true
-			}
-		}
-
-		s = flake.sequence
-	}
-}
-
 func TestToID(t *testing.T) {
 	timestampBits := uint(41)
 	workerIDBits := uint(10)

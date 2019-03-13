@@ -5,7 +5,6 @@ import (
 	"math/rand"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -38,7 +37,6 @@ func NewSnowflake(workerID uint32) (*Snowflake, error) {
 
 type Snowflake struct {
 	workerID      uint32
-	nextWorkerID  uint32
 	lastTimestamp uint64
 	sequence      uint32
 	syncMutex     *sync.Mutex
@@ -46,14 +44,6 @@ type Snowflake struct {
 
 func (g *Snowflake) WorkerID() uint32 {
 	return g.workerID
-}
-
-func (g *Snowflake) SetWorkerID(workerID uint32) error {
-	if workerID > maxWorkerID {
-		return WorkerIDToLarge
-	}
-	atomic.StoreUint32(&g.nextWorkerID, workerID)
-	return nil
 }
 
 func (g *Snowflake) next() (*flake, error) {
@@ -82,12 +72,6 @@ func (g *Snowflake) next() (*flake, error) {
 		}
 	} else {
 		sequence = generateRandomSequence(9)
-
-		// may switch worker id after timestamp changed
-		if g.nextWorkerID != 0 {
-			workerID = g.nextWorkerID
-			g.nextWorkerID = 0
-		}
 	}
 
 	g.lastTimestamp = timestamp
