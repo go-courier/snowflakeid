@@ -8,7 +8,7 @@ import (
 )
 
 func Benchmark(b *testing.B) {
-	startTime, _ := time.Parse(time.RFC3339, "2000-01-01T00:00:00Z")
+	startTime, _ := time.Parse(time.RFC3339, "2020-01-01T00:00:00Z")
 
 	for _, sets := range [][3]uint{
 		{10, 12, 1},
@@ -40,8 +40,6 @@ func TestSnowflake(t *testing.T) {
 
 	suite.RunGenerator(generator)
 	suite.ExpectN(suite.N)
-
-	t.Log(generator.ID())
 }
 
 func TestSnowflake_InMultiGoroutine(t *testing.T) {
@@ -110,14 +108,19 @@ type Suite struct {
 }
 
 func (s *Suite) ExpectN(n int) {
+	t := s.Total()
+	if t != n {
+		s.Fatalf("expect generated %d, but go %d", n, t)
+	}
+}
+
+func (s *Suite) Total() int {
 	c := 0
 	s.Range(func(key, value interface{}) bool {
 		c++
 		return true
 	})
-	if c != n {
-		s.Fatalf("expect generated %d, but go %d", n, c)
-	}
+	return c
 }
 
 func (s *Suite) RunGenerator(generator *Snowflake) {

@@ -13,7 +13,6 @@ var (
 )
 
 func NewSnowflakeFactory(bitLenWorkerID, bitLenSequence, gapMs uint, startTime time.Time) *SnowflakeFactory {
-
 	return &SnowflakeFactory{
 		bitLenWorkerID:  bitLenWorkerID,
 		bitLenSequence:  bitLenSequence,
@@ -30,19 +29,26 @@ type SnowflakeFactory struct {
 }
 
 func (f *SnowflakeFactory) MaskSequence(sequence uint32) uint32 {
-	return (sequence + 1) & f.MaxSequence()
+	return sequence & f.MaxSequence()
 }
 
 func (f *SnowflakeFactory) FlakeTimestamp(t time.Time) uint64 {
 	return uint64(t.UnixNano() / int64(f.unit))
 }
 
+func (f *SnowflakeFactory) CurrentElapsedTime() uint64 {
+	return f.FlakeTimestamp(time.Now()) - f.FlakeTimestamp(f.startTime)
+}
+
 func (f *SnowflakeFactory) SleepTime(overtime time.Duration) time.Duration {
 	return overtime*f.unit - time.Duration(time.Now().UnixNano())%f.unit*time.Nanosecond
 }
 
-func (f *SnowflakeFactory) BuildID(workerID uint32, elapsedTime uint64, sequence uint32) uint64 {
-	return elapsedTime<<(f.bitLenSequence+f.bitLenWorkerID) | uint64(sequence)<<f.bitLenWorkerID | uint64(workerID)
+func (f *SnowflakeFactory) BuildID(workerID uint32, elapsedTime uint64, sequence uint32) (uint64, error) {
+	if elapsedTime >= 1<<f.bitLenTimestamp {
+		return 0, errors.New("over the time limit")
+	}
+	return elapsedTime<<(f.bitLenSequence+f.bitLenWorkerID) | uint64(sequence)<<f.bitLenWorkerID | uint64(workerID), nil
 }
 
 func (f *SnowflakeFactory) MaxSequence() uint32 {
@@ -87,36 +93,31 @@ func (sf *Snowflake) ID() (uint64, error) {
 	sf.syncMutex.Lock()
 	defer sf.syncMutex.Unlock()
 
-	last := sf.elapsedTime
-	t := sf.f.FlakeTimestamp(sf.f.startTime)
+	currentElapsedTime := sf.f.CurrentElapsedTime()
 
-	current := sf.f.FlakeTimestamp(time.Now()) - t
+	if sf.elapsedTime < currentElapsedTime {
+		sf.elapsedTime = currentElapsedTime
+		sf.sequence = generateRandomSequence(9)
 
-	if current < last {
-		current = sf.f.FlakeTimestamp(time.Now()) - t
-		if current < last {
+		return sf.f.BuildID(sf.workerID, sf.elapsedTime, sf.sequence)
+	}
+
+	if sf.elapsedTime > currentElapsedTime {
+		currentElapsedTime = sf.f.CurrentElapsedTime()
+		if sf.elapsedTime > currentElapsedTime {
 			return 0, InvalidSystemClock
 		}
 	}
 
-	sequence := uint32(0)
+	// ==
 
-	if last == current {
-		sequence = sf.f.MaskSequence(sf.sequence)
-		if sequence == 0 {
-			current++
-			overtime := current - last
-			time.Sleep(sf.f.SleepTime(time.Duration(overtime)))
-			sequence = generateRandomSequence(9)
-		}
-	} else {
-		sequence = generateRandomSequence(9)
+	sf.sequence = sf.f.MaskSequence(sf.sequence + 1)
+	if sf.sequence == 0 {
+		sf.elapsedTime = sf.elapsedTime + 1
+		time.Sleep(sf.f.SleepTime(time.Duration(sf.elapsedTime - currentElapsedTime)))
 	}
 
-	sf.elapsedTime = current
-	sf.sequence = sequence
-
-	return sf.f.BuildID(sf.workerID, sf.elapsedTime, sf.sequence), nil
+	return sf.f.BuildID(sf.workerID, sf.elapsedTime, sf.sequence)
 }
 
 func generateRandomSequence(n int32) uint32 {
