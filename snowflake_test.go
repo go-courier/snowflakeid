@@ -20,7 +20,7 @@ func Benchmark(b *testing.B) {
 		f := NewSnowflakeFactory(sets[0], sets[1], sets[2], startTime)
 		g, _ := f.NewSnowflake(1)
 
-		b.Run(fmt.Sprintf("end at %s, max worker id %d, maxSequence %d,  per %dms", f.MaxTime(), f.MaxWorkerID(), f.MaxSequence(), sets[2]), func(b *testing.B) {
+		b.Run(fmt.Sprintf("end at %s, max worker %d max sequence %d per %dms", f.MaxTime(), f.MaxWorkerID(), f.MaxSequence(), sets[2]), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				_, err := g.ID()
 				if err != nil {
