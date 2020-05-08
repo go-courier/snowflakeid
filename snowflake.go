@@ -2,127 +2,123 @@ package snowflakeid
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
-	"strconv"
 	"sync"
 	"time"
 )
 
-const (
-	bitsTotal     = 64
-	bitsTimestamp = 41
-	bitsWorkerID  = 10
-	bitsSequence  = 12
-
-	twepoch      = uint64(1288834974657)     // Thu, 04 Nov 2010 01:42:54 657ms GMT
-	maskSequence = -1 ^ (-1 << bitsSequence) // MAX 4095
-
-	workerIDLeftShift   = bitsSequence
-	timestampRightShift = bitsTotal - bitsTimestamp - bitsWorkerID - bitsSequence
-	timestampLeftShift  = bitsSequence + bitsWorkerID + timestampRightShift
-	maxWorkerID         = -1 ^ (-1 << bitsWorkerID)
-)
-
 var (
-	WorkerIDToLarge    = errors.New("worker id can't be large than " + strconv.FormatInt(maxWorkerID, 10))
 	InvalidSystemClock = errors.New("invalid system clock")
 )
 
-func NewSnowflake(workerID uint32) (*Snowflake, error) {
-	if workerID > maxWorkerID {
-		return nil, WorkerIDToLarge
+func NewSnowflakeFactory(bitLenWorkerID, bitLenSequence, gapMs uint, startTime time.Time) *SnowflakeFactory {
+
+	return &SnowflakeFactory{
+		bitLenWorkerID:  bitLenWorkerID,
+		bitLenSequence:  bitLenSequence,
+		bitLenTimestamp: 63 - bitLenSequence - bitLenWorkerID,
+		startTime:       startTime,
+		unit:            time.Duration(gapMs) * time.Millisecond,
 	}
-	return &Snowflake{workerID: workerID, syncMutex: &sync.Mutex{}}, nil
+}
+
+type SnowflakeFactory struct {
+	bitLenWorkerID, bitLenTimestamp, bitLenSequence uint
+	startTime                                       time.Time
+	unit                                            time.Duration
+}
+
+func (f *SnowflakeFactory) MaskSequence(sequence uint32) uint32 {
+	return (sequence + 1) & f.MaxSequence()
+}
+
+func (f *SnowflakeFactory) FlakeTimestamp(t time.Time) uint64 {
+	return uint64(t.UnixNano() / int64(f.unit))
+}
+
+func (f *SnowflakeFactory) SleepTime(overtime time.Duration) time.Duration {
+	return overtime*f.unit - time.Duration(time.Now().UnixNano())%f.unit*time.Nanosecond
+}
+
+func (f *SnowflakeFactory) BuildID(workerID uint32, elapsedTime uint64, sequence uint32) uint64 {
+	return elapsedTime<<(f.bitLenSequence+f.bitLenWorkerID) | uint64(sequence)<<f.bitLenWorkerID | uint64(workerID)
+}
+
+func (f *SnowflakeFactory) MaxSequence() uint32 {
+	return 1<<f.bitLenSequence - 1
+}
+
+func (f *SnowflakeFactory) MaxWorkerID() uint32 {
+	return 1<<f.bitLenWorkerID - 1
+}
+
+func (f *SnowflakeFactory) MaxTime() time.Time {
+	maxTime := uint64(1<<f.bitLenTimestamp - 1)
+	return time.Unix(int64(time.Duration(f.FlakeTimestamp(f.startTime)+maxTime)*f.unit/time.Second), 0)
+}
+
+func (f *SnowflakeFactory) NewSnowflake(workerID uint32) (*Snowflake, error) {
+	maxWorkerID := f.MaxWorkerID()
+	if workerID > maxWorkerID {
+		return nil, fmt.Errorf("worker id can't be large than %d", maxWorkerID)
+	}
+	return &Snowflake{f: f, workerID: workerID, syncMutex: &sync.Mutex{}}, nil
+}
+
+func NewSnowflake(workerID uint32) (*Snowflake, error) {
+	startTime, _ := time.Parse(time.RFC3339, "2010-11-04T01:42:54.657Z")
+	return NewSnowflakeFactory(10, 12, 1, startTime).NewSnowflake(workerID)
 }
 
 type Snowflake struct {
-	workerID      uint32
-	lastTimestamp uint64
-	sequence      uint32
-	syncMutex     *sync.Mutex
+	f           *SnowflakeFactory
+	workerID    uint32
+	elapsedTime uint64
+	sequence    uint32
+	syncMutex   *sync.Mutex
 }
 
-func (g *Snowflake) WorkerID() uint32 {
-	return g.workerID
+func (sf *Snowflake) WorkerID() uint32 {
+	return sf.workerID
 }
 
-func (g *Snowflake) next() (*flake, error) {
-	g.syncMutex.Lock()
-	defer g.syncMutex.Unlock()
+func (sf *Snowflake) ID() (uint64, error) {
+	sf.syncMutex.Lock()
+	defer sf.syncMutex.Unlock()
 
-	lastTimeStamp := g.lastTimestamp
+	last := sf.elapsedTime
+	t := sf.f.FlakeTimestamp(sf.f.startTime)
 
-	timestamp := unixMillisecond()
+	current := sf.f.FlakeTimestamp(time.Now()) - t
 
-	if timestamp < lastTimeStamp {
-		timestamp = unixMillisecond()
-		if timestamp < lastTimeStamp {
-			return nil, InvalidSystemClock
+	if current < last {
+		current = sf.f.FlakeTimestamp(time.Now()) - t
+		if current < last {
+			return 0, InvalidSystemClock
 		}
 	}
 
-	var sequence uint32
-	workerID := g.workerID
+	sequence := uint32(0)
 
-	if timestamp == lastTimeStamp {
-		sequence = (g.sequence + 1) & maskSequence
+	if last == current {
+		sequence = sf.f.MaskSequence(sf.sequence)
 		if sequence == 0 {
-			timestamp = sleepTillNextMillisecond(timestamp)
+			current++
+			overtime := current - last
+			time.Sleep(sf.f.SleepTime(time.Duration(overtime)))
 			sequence = generateRandomSequence(9)
 		}
 	} else {
 		sequence = generateRandomSequence(9)
 	}
 
-	g.lastTimestamp = timestamp
-	g.workerID = workerID
-	g.sequence = sequence
+	sf.elapsedTime = current
+	sf.sequence = sequence
 
-	return newFlake(timestamp, workerID, sequence), nil
-}
-
-func unixMillisecond() uint64 {
-	return uint64(time.Now().UnixNano() / int64(time.Millisecond))
-}
-
-func sleepTillNextMillisecond(timestamp uint64) uint64 {
-	t := unixMillisecond()
-	for t <= timestamp {
-		time.Sleep(100 * time.Microsecond)
-		t = unixMillisecond()
-	}
-	return t
+	return sf.f.BuildID(sf.workerID, sf.elapsedTime, sf.sequence), nil
 }
 
 func generateRandomSequence(n int32) uint32 {
 	return uint32(rand.New(rand.NewSource(time.Now().UnixNano())).Int31n(n))
-}
-
-func (g *Snowflake) ID() (uint64, error) {
-	param, err := g.next()
-	if err != nil {
-		return 0, err
-	}
-	return param.id(), nil
-}
-
-func newFlake(timestamp uint64, workerID uint32, sequence uint32) *flake {
-	return &flake{timestamp, workerID, sequence}
-}
-
-type flake struct {
-	timestamp uint64
-	workerID  uint32
-	sequence  uint32
-}
-
-func (p *flake) id() uint64 {
-	// 41 bit timestamp part
-	timestampPart := (p.timestamp - twepoch) << timestampLeftShift >> timestampRightShift
-	// 10 bit worker id
-	workerIDPart := uint64(p.workerID) << workerIDLeftShift
-	// 12 bit serial number
-	noPart := uint64(p.sequence)
-
-	return timestampPart | workerIDPart | noPart
 }

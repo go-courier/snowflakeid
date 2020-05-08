@@ -1,18 +1,33 @@
 package snowflakeid
 
 import (
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
-func BenchmarkGenUniqueID(b *testing.B) {
-	g, _ := NewSnowflake(1)
+func Benchmark(b *testing.B) {
+	startTime, _ := time.Parse(time.RFC3339, "2000-01-01T00:00:00Z")
 
-	for i := 0; i < b.N; i++ {
-		_, err := g.ID()
-		if err != nil {
-			b.Fatal(err)
-		}
+	for _, sets := range [][3]uint{
+		{10, 12, 1},
+		{16, 10, 1},
+		{16, 8, 1},
+		{16, 8, 5},
+		{16, 8, 10},
+	} {
+		f := NewSnowflakeFactory(sets[0], sets[1], sets[2], startTime)
+		g, _ := f.NewSnowflake(1)
+
+		b.Run(fmt.Sprintf("end at %s, max worker id %d, maxSequence %d,  per %dms", f.MaxTime(), f.MaxWorkerID(), f.MaxSequence(), sets[2]), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				_, err := g.ID()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
@@ -25,6 +40,8 @@ func TestSnowflake(t *testing.T) {
 
 	suite.RunGenerator(generator)
 	suite.ExpectN(suite.N)
+
+	t.Log(generator.ID())
 }
 
 func TestSnowflake_InMultiGoroutine(t *testing.T) {
@@ -77,50 +94,6 @@ func TestSnowflake_WithDifferentWorkerID(t *testing.T) {
 	wg.Wait()
 
 	suite.ExpectN(suite.N * n)
-}
-
-func TestToID(t *testing.T) {
-	timestampBits := uint(41)
-	workerIDBits := uint(10)
-	sequenceBits := uint(12)
-
-	t.Run("Max", func(t *testing.T) {
-		timestamp := uint64(1<<timestampBits - 1)
-		workerID := uint32(1<<workerIDBits - 1)
-		sequence := uint32(1<<sequenceBits - 1)
-
-		id := newFlake(timestamp, workerID, sequence).id()
-
-		if id<<(64-sequenceBits)>>(64-sequenceBits) != uint64(sequence) {
-			t.Fatal("sequence bits incorrect")
-		}
-
-		if id<<(64-sequenceBits-workerIDBits)>>(64-workerIDBits) != uint64(workerID) {
-			t.Fatal("worker id bits incorrect")
-		}
-
-		if id<<(64-sequenceBits-workerIDBits-timestampBits)>>(64-timestampBits) != timestamp-twepoch {
-			t.Fatal("timestamp bits incorrect")
-		}
-	})
-
-	t.Run("Min", func(t *testing.T) {
-		timestamp := uint64(twepoch)
-		workerID := uint32(0)
-		sequence := uint32(0)
-
-		id := newFlake(timestamp, workerID, sequence).id()
-
-		if id<<(64-sequenceBits)>>(64-sequenceBits) != uint64(sequence) {
-			t.Fatal("sequence bits incorrect")
-		}
-		if id<<(64-sequenceBits-workerIDBits)>>(64-workerIDBits) != uint64(workerID) {
-			t.Fatal("worker id bits incorrect")
-		}
-		if id<<(64-sequenceBits-workerIDBits-timestampBits)>>(64-timestampBits) != timestamp-twepoch {
-			t.Fatal("timestamp bits incorrect")
-		}
-	})
 }
 
 func NewTestSuite(t *testing.T, n int) *Suite {
