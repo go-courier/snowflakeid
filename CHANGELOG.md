@@ -5,6 +5,9 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 
 
+# [1.2.1](https://github.com/go-courier/snowflakeid/compare/v1.2.0...v1.2.1)
+
+
 # [1.2.0](https://github.com/go-courier/snowflakeid/compare/v1.1.0...v1.2.0)
 
 ### Features
